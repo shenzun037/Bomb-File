@@ -7,7 +7,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 GB = 1 << 30
-FILE_NAME = "ทักษะวิชาการ.pdf"
+FILE_NAME = "name"
 RESERVE_BYTES = 1 * GB
 
 GENERIC_WRITE = 0x40000000
