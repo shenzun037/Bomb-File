@@ -1,4 +1,3 @@
-```
 # Disk Space Filler
 
 สคริปต์ Python สำหรับสร้างไฟล์ขนาดใหญ่เพื่อจองพื้นที่ว่างบนดิสก์จนเกือบเต็ม โดยเว้นพื้นที่สำรองไว้ตามที่กำหนด จุดเด่นคือบน Windows/NTFS จะจองพื้นที่ได้ในเวลาไม่ถึงวินาที แทนที่จะต้องเขียนข้อมูลจริงหลายสิบนาที
@@ -47,32 +46,17 @@
 | `eof-only` | ไม่ได้สิทธิ์ | ช้า ระบบ zero-fill ให้ | ศูนย์ทั้งหมด |
 
 ## วิธีใช้
-
-```
-
-py [main.py](http://main.py)
-
-```
+py main.py
 
 เปิด Command Prompt แบบ **Run as administrator** เพื่อให้ได้โหมด `valid-data`
 
 ## ตัวอย่างผลลัพธ์
-
-```
-
 Free:   214.36 GB
-
 Target: 213.36 GB
-
 Output: C:UsersuserDesktoptest.bin
-
 Mode:   valid-data (privilege: on)
-
 Done:   213.36 GB in 0.03s
-
 Free:   1.00 GB
-
-```
 
 ## ข้อควรทราบ
 
@@ -86,4 +70,3 @@ Free:   1.00 GB
 
 - Python 3.8 ขึ้นไป
 - ไม่ต้องติดตั้งไลบรารีเพิ่ม ใช้เฉพาะ standard library (`ctypes`, `os`, `shutil`, `time`, `pathlib`)
-```
