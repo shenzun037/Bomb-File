@@ -7,7 +7,9 @@ from ctypes import wintypes
 from pathlib import Path
 
 GB = 1 << 30
+# Name
 FILE_NAME = "name"
+# Free space
 RESERVE_BYTES = 1 * GB
 
 GENERIC_WRITE = 0x40000000
@@ -96,6 +98,7 @@ def alloc_posix(path: Path, size: int) -> bool:
         os.close(fd)
 
 def main() -> int:
+    # Target file
     target = Path.home() / "Desktop" / FILE_NAME
     target.parent.mkdir(parents=True, exist_ok=True)
 
