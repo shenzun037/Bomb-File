@@ -1,7 +1,5 @@
 <div align="center">
 
-# ⚡ Fast Large File Allocation
-
 **Create a file with a huge *logical* size in a fraction of the time it takes to write the same amount of data.**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
@@ -13,7 +11,7 @@
 
 ---
 
-## 📑 Table of Contents
+## Table of Contents
 
 - [Overview](#-overview)
 - [The Core Idea](#-the-core-idea)
@@ -29,7 +27,7 @@
 
 ---
 
-## 🔎 Overview
+## Overview
 
 Creating a 50 GB file does **not** necessarily mean writing 50 GB of zeros to the disk.
 
@@ -60,7 +58,7 @@ Free:   99.00 GB
 
 ---
 
-## 💡 The Core Idea
+## The Core Idea
 
 ```text
 Logical File Size   ≠   Amount of Data Physically Written
@@ -88,8 +86,8 @@ Ask the filesystem to make the file that large, and let the OS handle the rest.
 
 | Approach | What the app does | Work scales with size? |
 |---|---|:---:|
-| 🐢 `write()` zeros | Generates and transfers every byte | ✅ Yes |
-| 🚀 Allocation API | Sends one request to the filesystem | ❌ Mostly no |
+| `write()` zeros | Generates and transfers every byte | ✅ Yes |
+| Allocation API | Sends one request to the filesystem | ❌ Mostly no |
 
 ---
 
@@ -133,7 +131,7 @@ If it fails, the file can still have the requested size because `SetEndOfFile()`
 | `valid-data` | `SetEndOfFile` **and** `SetFileValidData` succeeded |
 | `eof-only` | Only `SetEndOfFile` succeeded (no privilege) |
 
-#### 🔐 `SeManageVolumePrivilege`
+#### `SeManageVolumePrivilege`
 
 `SetFileValidData()` is protected by this privilege, so the program tries to enable it first:
 
@@ -149,7 +147,7 @@ flowchart TD
 > [!NOTE]
 > The privilege is typically available only when running as Administrator.
 
-#### 🧩 Why `ctypes`?
+#### Why `ctypes`?
 
 Python doesn't wrap every Windows API. `ctypes` lets it call DLL exports directly:
 
@@ -176,7 +174,7 @@ class TOKEN_PRIVILEGES(ctypes.Structure):
                 ("Privileges", LUID_AND_ATTRIBUTES * 1)]
 ```
 
-### 🐧 Linux / POSIX
+### Linux / POSIX
 
 ```python
 def alloc_posix(path: Path, size: int) -> bool:
@@ -193,7 +191,7 @@ The exact physical behavior depends on the OS and filesystem.
 
 ---
 
-## 📐 Target Size Calculation
+## Target Size Calculation
 
 ```python
 GB = 1 << 30                # 1,073,741,824 bytes (technically 1 GiB)
@@ -222,7 +220,7 @@ dt = time.monotonic() - t0
 
 ---
 
-## 🔄 Complete Execution Flow
+## Complete Execution Flow
 
 ```mermaid
 flowchart TD
@@ -242,7 +240,7 @@ flowchart TD
 
 ---
 
-## 📊 Reading the Benchmark Correctly
+## Reading the Benchmark Correctly
 
 Suppose the program prints:
 
@@ -269,7 +267,7 @@ How these relate depends on the filesystem and allocation method. A large report
 
 ---
 
-## 🛡️ Security Considerations
+## Security Considerations
 
 `SetFileValidData()` is fast partly because it can skip zero-filling newly exposed disk regions. Those regions may still contain **stale data from files previously stored on the disk**, which is why Windows gates the API behind a privilege.
 
@@ -279,7 +277,7 @@ How these relate depends on the filesystem and allocation method. A large report
 
 ---
 
-## ⚠️ Caveats
+## Caveats
 
 Results vary a lot depending on:
 
@@ -298,7 +296,7 @@ A more accurate statement:
 
 ---
 
-## 🎯 Key Takeaways
+## Key Takeaways
 
 ```text
 1. Don't generate N GB of data.
@@ -313,7 +311,7 @@ Fast Allocation  ≠   Fast Physical Storage Throughput
 
 ---
 
-## 📜 Disclaimer
+## Disclaimer
 
 This project demonstrates filesystem allocation behavior.
 
