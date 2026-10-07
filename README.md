@@ -1,540 +1,50 @@
-# Fast Large File Allocation
+<div align="center">
 
-> Create a file with a very large logical size in a fraction of the time normally required to write the same amount of data.
+# ⚡ Fast Large File Allocation
 
-This project demonstrates how operating-system and filesystem APIs can be used to create a large file without explicitly writing every byte of that file from Python.
+**Create a file with a huge *logical* size in a fraction of the time it takes to write the same amount of data.**
 
-For example, creating a 50 GB file does **not** necessarily mean writing 50 GB of zero bytes to the storage device.
+![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?logo=python&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-NTFS%20%7C%20ReFS-0078D6?logo=windows&logoColor=white)
+![Linux](https://img.shields.io/badge/Linux-ext4%20%7C%20XFS%20%7C%20Btrfs-FCC624?logo=linux&logoColor=black)
+![Type](https://img.shields.io/badge/type-filesystem%20experiment-orange)
 
-The key idea is:
-
-```text
-Traditional file creation
-Python → generate data → write data → disk
-
-Fast allocation
-Python → filesystem metadata/allocation operation → file
-```
+</div>
 
 ---
 
-## How Can a Huge File Be Created So Quickly?
+## 📑 Table of Contents
 
-A normal approach might look like this:
-
-```python
-with open("test.bin", "wb") as f:
-    f.write(b"\x00" * (10 * 1024**3))
-```
-
-This approach actually attempts to process approximately 10 GiB of data.
-
-The larger the file becomes, the more work the system has to perform:
-
-```text
-10 GiB
-   ↓
-Generate bytes
-   ↓
-Transfer data
-   ↓
-Filesystem I/O
-   ↓
-Storage device
-```
-
-The code in this project takes a different approach.
-
-Instead of producing billions of bytes, it asks the filesystem to make the file's logical size very large.
-
-For example:
-
-```text
-test.bin
-Logical size: 50 GiB
-```
-
-The operation that creates this logical size can be dramatically cheaper than physically writing 50 GiB of data.
-
-That is why the program can sometimes report a result such as:
-
-```text
-Done: 49.00 GB in 0.84s
-```
-
-This should **not** be interpreted as the storage device physically writing 49 GB in 0.84 seconds.
+- [Overview](#-overview)
+- [The Core Idea](#-the-core-idea)
+- [How It Works](#-how-it-works)
+  - [Windows](#-windows)
+  - [Linux / POSIX](#-linux--posix)
+- [Target Size Calculation](#-target-size-calculation)
+- [Reading the Benchmark Correctly](#-reading-the-benchmark-correctly)
+- [Security Considerations](#-security-considerations)
+- [Caveats](#-caveats)
+- [Key Takeaways](#-key-takeaways)
+- [Disclaimer](#-disclaimer)
 
 ---
 
-# Core Concept
+## 🔎 Overview
 
-The most important distinction is:
+Creating a 50 GB file does **not** necessarily mean writing 50 GB of zeros to the disk.
 
-```text
-Logical File Size
-        ≠
-Amount of Data Physically Written
-```
-
-A filesystem maintains metadata describing a file, including its size.
-
-The program can modify that metadata without first generating a buffer containing the entire file.
-
-Conceptually:
+This project shows how OS and filesystem APIs can create a very large file **without generating or writing every byte from Python**.
 
 ```text
-Before
-
-test.bin
-size = 0
-
-
-After
-
-test.bin
-size = 50 GiB
+Traditional file creation        Fast allocation
+─────────────────────────        ─────────────────────────────────
+Python                           Python
+  ↓ generate data                  ↓ filesystem API call
+  ↓ write data                     ↓ metadata / allocation operation
+Disk                             File ✔
 ```
 
-The transition between those states can be much faster than:
-
-```text
-0 GiB
- ↓
-1 GiB
- ↓
-2 GiB
- ↓
-...
- ↓
-50 GiB
-```
-
-of actual byte writes.
-
----
-
-# Windows Implementation
-
-On Windows, the important APIs are:
-
-```python
-CreateFileW()
-SetFilePointerEx()
-SetEndOfFile()
-SetFileValidData()
-```
-
-The relevant section is:
-
-```python
-h = k32.CreateFileW(
-    str(path),
-    GENERIC_WRITE,
-    0,
-    None,
-    CREATE_ALWAYS,
-    FILE_ATTRIBUTE_NORMAL,
-    None
-)
-
-k32.SetFilePointerEx(h, size, None, FILE_BEGIN)
-k32.SetEndOfFile(h)
-k32.SetFileValidData(h, size)
-```
-
-Each operation has a different responsibility.
-
----
-
-## 1. `CreateFileW()`
-
-```python
-h = k32.CreateFileW(...)
-```
-
-This creates or opens the target file and returns a Windows file handle.
-
-The program requests write access:
-
-```python
-GENERIC_WRITE = 0x40000000
-```
-
-and uses:
-
-```python
-CREATE_ALWAYS = 2
-```
-
-which means an existing file with the same name is replaced.
-
----
-
-## 2. `SetFilePointerEx()`
-
-```python
-k32.SetFilePointerEx(
-    h,
-    size,
-    None,
-    FILE_BEGIN
-)
-```
-
-This does not write `size` bytes.
-
-It moves the file pointer to the requested offset.
-
-For example:
-
-```text
-0 GB                                      50 GB
-│-------------------------------------------│
-                                            ▲
-                                            │
-                                       file pointer
-```
-
-The program therefore reaches the target offset without transferring 50 GB of data through a normal write operation.
-
----
-
-## 3. `SetEndOfFile()`
-
-```python
-k32.SetEndOfFile(h)
-```
-
-This makes the current file-pointer position the end of the file.
-
-After:
-
-```python
-SetFilePointerEx(...)
-SetEndOfFile(...)
-```
-
-Windows can report:
-
-```text
-File: test.bin
-Size: 50 GB
-```
-
-without the Python program having to execute:
-
-```python
-write(...)
-```
-
-for all 50 GB.
-
-This is one of the main reasons the operation can be extremely fast.
-
----
-
-# `SetFileValidData()`
-
-The most specialized part of the Windows implementation is:
-
-```python
-k32.SetFileValidData(h, size)
-```
-
-This API can allow Windows to treat a range of the file as valid data without performing the normal initialization work associated with exposing newly allocated disk regions.
-
-That is useful for performance, but it has security implications.
-
-For this reason, Windows protects the operation with a special privilege:
-
-```text
-SeManageVolumePrivilege
-```
-
-The program therefore attempts to enable that privilege before calling `SetFileValidData()`.
-
----
-
-# Why `SeManageVolumePrivilege` Is Needed
-
-The code contains:
-
-```python
-enable_privilege("SeManageVolumePrivilege")
-```
-
-The function uses Windows security APIs to modify the privileges available to the current process.
-
-The flow is:
-
-```text
-Current Process
-      │
-      ▼
-OpenProcessToken()
-      │
-      ▼
-LookupPrivilegeValueW()
-      │
-      ▼
-Build TOKEN_PRIVILEGES
-      │
-      ▼
-AdjustTokenPrivileges()
-      │
-      ▼
-SeManageVolumePrivilege enabled
-```
-
-The relevant APIs are provided by:
-
-```text
-kernel32.dll
-advapi32.dll
-```
-
-Python accesses those Windows APIs through `ctypes`.
-
----
-
-# Why Does the Code Use `ctypes`?
-
-Python does not expose every Windows API as a normal Python function.
-
-`ctypes` allows Python to call functions exported by Windows DLLs directly.
-
-For example:
-
-```python
-k32 = ctypes.WinDLL(
-    "kernel32",
-    use_last_error=True
-)
-```
-
-and:
-
-```python
-adv = ctypes.WinDLL(
-    "advapi32",
-    use_last_error=True
-)
-```
-
-The code then declares the expected function signatures:
-
-```python
-k32.SetEndOfFile.argtypes = [
-    wintypes.HANDLE
-]
-```
-
-This tells `ctypes` what type of argument Windows expects.
-
----
-
-# Windows Structures
-
-Some Windows APIs expect C structures rather than simple integers.
-
-The code recreates these structures using:
-
-```python
-ctypes.Structure
-```
-
-For example:
-
-```python
-class LUID(ctypes.Structure):
-    _fields_ = [
-        ("LowPart", wintypes.DWORD),
-        ("HighPart", ctypes.c_long)
-    ]
-```
-
-and:
-
-```python
-class LUID_AND_ATTRIBUTES(ctypes.Structure):
-    _fields_ = [
-        ("Luid", LUID),
-        ("Attributes", wintypes.DWORD)
-    ]
-```
-
-and finally:
-
-```python
-class TOKEN_PRIVILEGES(ctypes.Structure):
-    _fields_ = [
-        ("PrivilegeCount", wintypes.DWORD),
-        ("Privileges", LUID_AND_ATTRIBUTES * 1)
-    ]
-```
-
-These structures reproduce the memory layout expected by the Windows API.
-
----
-
-# The `alloc_nt()` Function
-
-The main Windows allocation routine is:
-
-```python
-def alloc_nt(path: Path, size: int) -> bool:
-```
-
-Its sequence is:
-
-```text
-CreateFileW
-    ↓
-SetFilePointerEx
-    ↓
-SetEndOfFile
-    ↓
-SetFileValidData
-    ↓
-CloseHandle
-```
-
-In simplified form:
-
-```python
-CreateFileW(...)
-SetFilePointerEx(...)
-SetEndOfFile(...)
-SetFileValidData(...)
-```
-
-The function returns `True` when `SetFileValidData()` succeeds.
-
-If it fails, the program can still have a file with the requested logical size because `SetEndOfFile()` may already have succeeded.
-
-That is why the program distinguishes between:
-
-```text
-valid-data
-```
-
-and:
-
-```text
-eof-only
-```
-
----
-
-# POSIX / Linux Implementation
-
-The program also contains a separate implementation for non-Windows systems:
-
-```python
-def alloc_posix(path: Path, size: int) -> bool:
-```
-
-It opens the file:
-
-```python
-fd = os.open(
-    path,
-    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-    0o644
-)
-```
-
-Then it prefers:
-
-```python
-os.posix_fallocate(fd, 0, size)
-```
-
-when available.
-
-`posix_fallocate()` requests allocation of the specified file space.
-
-If unavailable, the program falls back to:
-
-```python
-os.ftruncate(fd, size)
-```
-
-The exact physical behavior depends on the operating system and filesystem.
-
----
-
-# Calculating the Target Size
-
-The program defines:
-
-```python
-GB = 1 << 30
-```
-
-which equals:
-
-```text
-1,073,741,824 bytes
-```
-
-This is technically 1 GiB rather than 1 decimal GB, but the variable name `GB` is used for convenience.
-
-The program reserves approximately 1 GiB:
-
-```python
-RESERVE_BYTES = 1 * GB
-```
-
-Then checks the available space:
-
-```python
-free = shutil.disk_usage(target.parent).free
-```
-
-and calculates:
-
-```python
-total = max(
-    0,
-    free - RESERVE_BYTES
-)
-```
-
-For example:
-
-```text
-Available:
-50 GiB
-
-Reserved:
-1 GiB
-
-Target:
-49 GiB
-```
-
-The purpose is to avoid consuming the entire free space of the volume.
-
----
-
-# Measuring Performance
-
-The program measures allocation time with:
-
-```python
-t0 = time.monotonic()
-```
-
-and:
-
-```python
-dt = time.monotonic() - t0
-```
-
-`monotonic()` is appropriate for elapsed-time measurements because it is not affected by normal changes to the system clock.
-
-The output may look like:
+A typical output looks like this:
 
 ```text
 Free:   100.00 GB
@@ -545,265 +55,266 @@ Done:   99.00 GB in 0.72s
 Free:   99.00 GB
 ```
 
-The important point is that:
-
-```text
-99 GB / 0.72 seconds
-```
-
-is **not** necessarily the physical write throughput of the disk.
-
-It represents the execution time of the allocation-related operations being measured.
+> [!IMPORTANT]
+> `99 GB in 0.72s` is **not** the physical write speed of your disk. See [Reading the Benchmark Correctly](#-reading-the-benchmark-correctly).
 
 ---
 
-# Why It Can Be Much Faster Than `write()`
-
-Compare the two approaches.
-
-## Traditional writing
+## 💡 The Core Idea
 
 ```text
-Python
-  ↓
-Generate bytes
-  ↓
-Memory
-  ↓
-Filesystem
-  ↓
-Storage
+Logical File Size   ≠   Amount of Data Physically Written
 ```
 
-For a 100 GB file, approximately 100 GB of data must be processed.
-
-## Allocation-based approach
+A filesystem stores a file's size as **metadata**. Changing that metadata does not require a buffer holding the whole file.
 
 ```text
-Python
-  ↓
-Filesystem API
-  ↓
-Metadata / allocation operation
-  ↓
-File
+Before                    After
+──────────                ──────────────
+test.bin                  test.bin
+size = 0                  size = 50 GiB
 ```
 
-The amount of data transferred by the application can therefore be dramatically smaller.
+### The slow way
 
-This is the fundamental reason for the speed difference.
+```python
+with open("test.bin", "wb") as f:
+    f.write(b"\x00" * (10 * 1024**3))   # actually processes ~10 GiB
+```
+
+### The fast way
+
+Ask the filesystem to make the file that large, and let the OS handle the rest.
+
+| Approach | What the app does | Work scales with size? |
+|---|---|:---:|
+| 🐢 `write()` zeros | Generates and transfers every byte | ✅ Yes |
+| 🚀 Allocation API | Sends one request to the filesystem | ❌ Mostly no |
 
 ---
 
-# The Most Important Performance Detail
+## ⚙️ How It Works
 
-The program is not discovering a way to make hardware physically write 100 GB instantaneously.
+### 🪟 Windows
 
-Instead, it is avoiding unnecessary data transfer.
+The Windows path calls four WinAPI functions through `ctypes`:
 
-Think of the difference as:
-
-```text
-METHOD A
-
-"Here are 100 GB of bytes.
-Please write all of them."
+```mermaid
+flowchart LR
+    A[CreateFileW] --> B[SetFilePointerEx]
+    B --> C[SetEndOfFile]
+    C --> D[SetFileValidData]
+    D --> E[CloseHandle]
 ```
 
-versus:
+| Step | API | What it does |
+|:---:|---|---|
+| 1 | `CreateFileW()` | Creates the file (`CREATE_ALWAYS` replaces any existing file) and returns a handle |
+| 2 | `SetFilePointerEx()` | Moves the file pointer to `size`. **Writes nothing.** |
+| 3 | `SetEndOfFile()` | Declares the pointer position as the end of file, so the file now reports the full size |
+| 4 | `SetFileValidData()` | Marks the range as valid so Windows can skip zero-initialization. Needs a special privilege |
 
-```text
-METHOD B
+```python
+h = k32.CreateFileW(str(path), GENERIC_WRITE, 0, None,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, None)
 
-"Make this file's logical size 100 GB."
+k32.SetFilePointerEx(h, size, None, FILE_BEGIN)
+k32.SetEndOfFile(h)
+k32.SetFileValidData(h, size)
 ```
 
-Those are fundamentally different operations.
+#### Two possible outcomes
+
+`alloc_nt(path, size) -> bool` returns `True` only if `SetFileValidData()` succeeds.
+If it fails, the file can still have the requested size because `SetEndOfFile()` may already have succeeded.
+
+| Mode | Meaning |
+|---|---|
+| `valid-data` | `SetEndOfFile` **and** `SetFileValidData` succeeded |
+| `eof-only` | Only `SetEndOfFile` succeeded (no privilege) |
+
+#### 🔐 `SeManageVolumePrivilege`
+
+`SetFileValidData()` is protected by this privilege, so the program tries to enable it first:
+
+```mermaid
+flowchart TD
+    A[Current Process] --> B[OpenProcessToken]
+    B --> C[LookupPrivilegeValueW]
+    C --> D[Build TOKEN_PRIVILEGES]
+    D --> E[AdjustTokenPrivileges]
+    E --> F[SeManageVolumePrivilege enabled]
+```
+
+> [!NOTE]
+> The privilege is typically available only when running as Administrator.
+
+#### 🧩 Why `ctypes`?
+
+Python doesn't wrap every Windows API. `ctypes` lets it call DLL exports directly:
+
+```python
+k32 = ctypes.WinDLL("kernel32",  use_last_error=True)
+adv = ctypes.WinDLL("advapi32",  use_last_error=True)
+
+k32.SetEndOfFile.argtypes = [wintypes.HANDLE]
+```
+
+Some APIs expect C structs, so the memory layout is recreated with `ctypes.Structure`:
+
+```python
+class LUID(ctypes.Structure):
+    _fields_ = [("LowPart", wintypes.DWORD),
+                ("HighPart", ctypes.c_long)]
+
+class LUID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("Luid", LUID),
+                ("Attributes", wintypes.DWORD)]
+
+class TOKEN_PRIVILEGES(ctypes.Structure):
+    _fields_ = [("PrivilegeCount", wintypes.DWORD),
+                ("Privileges", LUID_AND_ATTRIBUTES * 1)]
+```
+
+### 🐧 Linux / POSIX
+
+```python
+def alloc_posix(path: Path, size: int) -> bool:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    ...
+```
+
+| Priority | Call | Behavior |
+|:---:|---|---|
+| 1 | `os.posix_fallocate(fd, 0, size)` | Requests allocation of the file space |
+| 2 | `os.ftruncate(fd, size)` | Fallback: sets the logical size |
+
+The exact physical behavior depends on the OS and filesystem.
 
 ---
 
-# Logical Size vs Physical Allocation
+## 📐 Target Size Calculation
 
-Filesystem terminology can be confusing because several concepts are involved.
+```python
+GB = 1 << 30                # 1,073,741,824 bytes (technically 1 GiB)
+RESERVE_BYTES = 1 * GB      # leave ~1 GiB untouched
 
-A file may have:
-
-```text
-Logical size
+free  = shutil.disk_usage(target.parent).free
+total = max(0, free - RESERVE_BYTES)
 ```
 
-and:
-
 ```text
-Allocated physical blocks
+Available   50 GiB
+Reserved  −  1 GiB
+─────────────────
+Target      49 GiB
 ```
 
-These values and their semantics depend on the filesystem and allocation method.
+The reserve prevents the program from consuming all free space on the volume.
 
-Therefore:
+Timing uses `time.monotonic()`, which is not affected by system clock changes:
 
-```text
-Large file size
-```
-
-does not automatically mean:
-
-```text
-The program just wrote the same amount of user data.
-```
-
-This distinction is essential when interpreting benchmarks.
-
----
-
-# Complete Execution Flow
-
-```text
-main()
- │
- ├── Locate Desktop
- │
- ├── Check filesystem free space
- │
- ├── Reserve 1 GiB
- │
- ├── Calculate target size
- │
- ├── Windows?
- │      │
- │      ├── Enable SeManageVolumePrivilege
- │      ├── CreateFileW
- │      ├── SetFilePointerEx
- │      ├── SetEndOfFile
- │      └── SetFileValidData
- │
- └── POSIX?
-        │
-        ├── open()
-        └── posix_fallocate()
-             or ftruncate()
+```python
+t0 = time.monotonic()
+...
+dt = time.monotonic() - t0
 ```
 
 ---
 
-# Why the Result Can Look "Impossible"
+## 🔄 Complete Execution Flow
 
-Suppose the program reports:
+```mermaid
+flowchart TD
+    M[main] --> D[Locate Desktop]
+    D --> F[Check free space]
+    F --> R[Reserve 1 GiB]
+    R --> T[Calculate target size]
+    T --> OS{Windows?}
+    OS -- Yes --> W1[Enable SeManageVolumePrivilege]
+    W1 --> W2[CreateFileW]
+    W2 --> W3[SetFilePointerEx]
+    W3 --> W4[SetEndOfFile]
+    W4 --> W5[SetFileValidData]
+    OS -- No --> P1[os.open]
+    P1 --> P2[posix_fallocate or ftruncate]
+```
+
+---
+
+## 📊 Reading the Benchmark Correctly
+
+Suppose the program prints:
 
 ```text
 Done: 80.00 GB in 0.50s
 ```
 
-It may look like:
+It's tempting to compute `80 GB ÷ 0.5 s = 160 GB/s`. **That number is meaningless here**, because no 80 GB of user data was written.
 
-```text
-80 GB ÷ 0.5 s = 160 GB/s
-```
+| ❌ Wrong interpretation | ✅ Correct interpretation |
+|---|---|
+| "My disk wrote 160 GB/s" | "The filesystem completed the size/allocation request in 0.50 s" |
 
-But that calculation would only be meaningful if the program had actually written 80 GB of user data.
+This benchmark should be described as **fast logical file allocation**, not as disk write throughput.
 
-That is not what this benchmark measures.
+### Logical size vs physical allocation
 
-A better interpretation is:
+A file has both:
 
-```text
-The filesystem completed the requested
-file-size/allocation operation in 0.50 seconds.
-```
+- **Logical size**: what the file reports
+- **Allocated physical blocks**: what the filesystem actually reserved
 
-The benchmark should therefore be described as:
-
-> Fast logical file allocation
-
-rather than:
-
-> 160 GB/s disk write speed
+How these relate depends on the filesystem and allocation method. A large reported size does not mean the same amount of user data was written.
 
 ---
 
-# Security Considerations
+## 🛡️ Security Considerations
 
-`SetFileValidData()` deserves particular attention.
+`SetFileValidData()` is fast partly because it can skip zero-filling newly exposed disk regions. Those regions may still contain **stale data from files previously stored on the disk**, which is why Windows gates the API behind a privilege.
 
-The API can avoid certain filesystem initialization operations, which is one reason it can be fast. However, this behavior has security implications because newly exposed file regions must not inadvertently reveal stale information from previous disk usage.
-
-That is why Windows restricts the operation through a privileged security mechanism.
-
-This code should therefore be treated as a filesystem/API experiment, not as a generic file-copy or benchmarking technique.
-
-Do not use it on a disk containing important data unless you understand the storage and filesystem semantics.
+> [!WARNING]
+> Treat this as a filesystem/API experiment, not a general-purpose file-creation or benchmarking tool.
+> Don't run it on a disk holding important data unless you understand the storage and filesystem semantics.
 
 ---
 
-# Important Caveats
+## ⚠️ Caveats
 
-Performance is highly environment-dependent.
+Results vary a lot depending on:
 
-Results can change depending on:
+| Factor | Examples |
+|---|---|
+| Filesystem | NTFS, ReFS, ext4, XFS, Btrfs |
+| Storage | SSD, HDD, storage controller |
+| Environment | Virtual machine, cloud storage |
+| Security | Disk encryption, system permissions |
+| Capacity | Available free space |
+
+So never claim *"any 100 GB file can be created in exactly 1 second."*
+A more accurate statement:
+
+> Large logical files can sometimes be created extremely quickly because the program avoids writing the entire file contents.
+
+---
+
+## 🎯 Key Takeaways
 
 ```text
-NTFS / ReFS / ext4 / XFS / Btrfs
-SSD / HDD
-Filesystem configuration
-Storage controller
-Virtual machine
-Cloud storage
-Disk encryption
-System permissions
-Available free space
+1. Don't generate N GB of data.
+2. Ask the filesystem for a file of size N GB.
+3. Let the operating system handle the allocation semantics.
 ```
 
-The code should therefore never claim:
-
 ```text
-"Any 100 GB file can always be created in exactly 1 second."
-```
-
-A more accurate claim is:
-
-```text
-Large logical files can sometimes be created extremely quickly
-because the program avoids writing the entire file contents.
+File Size        ≠   Amount of User Data Written
+Fast Allocation  ≠   Fast Physical Storage Throughput
 ```
 
 ---
 
-# Key Takeaways
-
-The core technique can be summarized in three lines:
-
-```text
-Do not generate N GB of data.
-
-Ask the filesystem for a file with size N GB.
-
-Let the operating system handle the allocation semantics.
-```
-
-Or more precisely:
-
-```text
-File Size
-    ≠
-Amount of User Data Written
-```
-
-and:
-
-```text
-Fast Allocation
-    ≠
-Fast Physical Storage Throughput
-```
-
-That distinction explains why a file that appears to be tens or hundreds of gigabytes can be created in a very short amount of time.
-
----
-
-# Disclaimer
+## 📜 Disclaimer
 
 This project demonstrates filesystem allocation behavior.
 
-It does not provide a method for bypassing physical storage limits, creating real storage capacity, or achieving impossible disk-write speeds.
-
-Reported performance represents the completion time of the selected filesystem operations, not necessarily the physical throughput of the underlying storage device.
+It does **not** bypass physical storage limits, create real storage capacity, or achieve impossible disk-write speeds. Reported times reflect the completion of the selected filesystem operations, not the physical throughput of the underlying storage device.
